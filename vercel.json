@@ -1,8 +1,6 @@
 {
   "rewrites": [
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
-    }
+    { "source": "/api/tts", "destination": "/api/tts.js" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
