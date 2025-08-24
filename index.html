@@ -1,62 +1,314 @@
-// This is a serverless function that will run on a server, not in the browser.
-// Its job is to securely call the ElevenLabs API.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lara - Your AI Companion</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .chat-bubble {
+            max-width: 75%;
+        }
+        .lara-bubble {
+            background-color: #7C3AED; /* purple-600 */
+        }
+        .user-bubble {
+            background-color: #2563EB; /* blue-600 */
+        }
+        #lara-orb {
+            transition: transform 0.3s ease-in-out, box-shadow 0.3s ease-in-out;
+        }
+        #lara-orb.listening {
+            transform: scale(1.1);
+            box-shadow: 0 0 40px 10px rgba(168, 85, 247, 0.6);
+        }
+        #lara-orb.speaking {
+            animation: gentle-pulse 1.5s infinite ease-in-out;
+        }
+        @keyframes gentle-pulse {
+            0%, 100% {
+                transform: scale(1);
+                box-shadow: 0 0 20px 5px rgba(168, 85, 247, 0.4);
+            }
+            50% {
+                transform: scale(1.05);
+                box-shadow: 0 0 30px 8px rgba(168, 85, 247, 0.5);
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
 
-export default async function handler(request, response) {
-  // We only want to handle POST requests, which is what our app sends.
-  if (request.method !== 'POST') {
-    return response.status(405).json({ message: 'Method not allowed' });
-  }
+    <div class="w-full max-w-2xl mx-auto flex flex-col h-[90vh]">
+        <header class="text-center mb-4">
+            <h1 class="text-4xl font-bold text-purple-300">Lara</h1>
+            <p class="text-slate-400">Your AI Companion</p>
+        </header>
 
-  try {
-    // Get the text that our app sent in the request.
-    const { text } = request.body;
-    if (!text) {
-      return response.status(400).json({ message: 'Text is required' });
-    }
+        <!-- Chat Display -->
+        <div id="chat-container" class="flex-grow bg-slate-800/50 rounded-2xl p-4 overflow-y-auto mb-4 flex flex-col space-y-4">
+            <!-- Chat messages will be appended here -->
+        </div>
 
-    // This is the crucial part: Get the secret API key from a secure location.
-    const apiKey = process.env.ELEVENLABS_API_KEY;
-    if (!apiKey) {
-        return response.status(500).json({ message: 'API key not configured on the server.' });
-    }
+        <!-- Lara's Orb Visualizer -->
+        <div class="flex justify-center items-center my-6">
+            <div id="lara-orb" class="w-28 h-28 md:w-32 md:h-32 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center shadow-lg">
+                 <svg id="mic-icon" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white/80"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+            </div>
+        </div>
+        
+        <!-- Status and Control -->
+        <div class="text-center">
+            <p id="status" class="text-slate-400 h-6 mb-4">Click the button to start chatting</p>
+            <button id="toggle-btn" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-8 rounded-full transition-all duration-300 shadow-lg focus:outline-none focus:ring-4 focus:ring-purple-400/50">
+                Start Conversation
+            </button>
+        </div>
+    </div>
 
-    // This is the ID for a great, natural-sounding voice from ElevenLabs called "Rachel".
-    const voiceId = '21m00Tcm4TlvDq8ikWAM'; 
+    <script>
+        // DOM Elements
+        const toggleBtn = document.getElementById('toggle-btn');
+        const statusEl = document.getElementById('status');
+        const chatContainer = document.getElementById('chat-container');
+        const laraOrb = document.getElementById('lara-orb');
 
-    // Call the real ElevenLabs API, including our secret key.
-    const elevenLabsResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': apiKey, // Here's where we use the secret key.
-        },
-        body: JSON.stringify({
-          text: text,
-          model_id: 'eleven_multilingual_v2',
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-          },
-        }),
-      }
-    );
+        // Check for browser support
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        if (!SpeechRecognition) {
+            statusEl.textContent = "Sorry, your browser doesn't support the Speech Recognition API.";
+            toggleBtn.disabled = true;
+        }
 
-    if (!elevenLabsResponse.ok) {
-      // If ElevenLabs gives an error, we send it back to our app to help debug.
-      const errorData = await elevenLabsResponse.text();
-      console.error('ElevenLabs API Error:', errorData);
-      return response.status(elevenLabsResponse.status).json({ message: 'Error from ElevenLabs API' });
-    }
+        // --- State Management ---
+        let conversationActive = false;
+        let isFirstInteraction = true;
+        let sessionMemory = {
+            userName: null,
+            userFeeling: null,
+            lastTopic: null,
+        };
 
-    // If successful, we get the audio data and send it back to our app.
-    response.setHeader('Content-Type', 'audio/mpeg');
-    const audioStream = elevenLabsResponse.body;
-    return response.status(200).send(audioStream);
+        // --- [NEW] AI Speech Synthesis (Lara's Voice via API) ---
+        // This function now calls an external service for high-quality voice.
+        // NOTE: This will not work until we create a backend endpoint at '/api/tts'.
+        function speak(text) {
+            return new Promise(async (resolve, reject) => {
+                addMessageToChat('Lara', text);
+                statusEl.textContent = "Lara is thinking...";
+                laraOrb.classList.add('speaking'); // Start visual feedback early
 
-  } catch (error) {
-    console.error('Internal Server Error:', error);
-    return response.status(500).json({ message: 'Internal server error' });
-  }
-}
+                try {
+                    // This is the new part: we fetch the audio from our own backend proxy.
+                    const response = await fetch('/api/tts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: text }),
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Server responded with ${response.status}`);
+                    }
+
+                    const audioBlob = await response.blob();
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const audio = new Audio(audioUrl);
+                    
+                    audio.oncanplaythrough = () => {
+                         statusEl.textContent = "Lara is speaking...";
+                    };
+                    audio.onended = () => {
+                        laraOrb.classList.remove('speaking');
+                        statusEl.textContent = conversationActive ? "Listening..." : "Click the button to start";
+                        resolve();
+                    };
+                    audio.onerror = (err) => {
+                        console.error("Error playing audio:", err);
+                        reject(err);
+                    };
+                    audio.play();
+
+                } catch (error) {
+                    console.error('Error fetching or playing TTS audio:', error);
+                    statusEl.textContent = "Sorry, I'm having trouble speaking right now.";
+                    laraOrb.classList.remove('speaking');
+                    reject(error);
+                }
+            });
+        }
+
+        // --- Speech Recognition (User's Voice) ---
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => {
+            laraOrb.classList.add('listening');
+            statusEl.textContent = 'Listening...';
+        };
+
+        recognition.onend = () => {
+            laraOrb.classList.remove('listening');
+        };
+
+        recognition.onerror = (event) => {
+            console.error('SpeechRecognition.onerror', event);
+            statusEl.textContent = `Error: ${event.error}. Please try again.`;
+        };
+
+        recognition.onresult = (event) => {
+            const transcript = event.results[event.results.length - 1][0].transcript.trim();
+            addMessageToChat('You', transcript);
+            handleUserInput(transcript);
+        };
+
+        // --- UI and Chat Logic ---
+        function addMessageToChat(sender, message) {
+            const bubble = document.createElement('div');
+            bubble.classList.add('chat-bubble', 'p-3', 'rounded-xl', 'w-fit', 'text-white');
+            bubble.textContent = message;
+
+            if (sender === 'Lara') {
+                bubble.classList.add('lara-bubble', 'self-start');
+            } else {
+                bubble.classList.add('user-bubble', 'self-end');
+            }
+            chatContainer.appendChild(bubble);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        async function handleUserInput(text) {
+            recognition.stop(); // Pause listening while Lara responds
+            try {
+                const response = getLaraResponse(text.toLowerCase());
+                await speak(response);
+            } catch (error) {
+                console.error("Error during Lara's speech:", error);
+            } finally {
+                // If the conversation is still active, resume listening.
+                if (conversationActive) {
+                    setTimeout(() => {
+                        try {
+                            recognition.start();
+                        } catch (e) {
+                            console.warn("Could not restart recognition immediately.", e);
+                        }
+                    }, 250);
+                }
+            }
+        }
+        
+        toggleBtn.addEventListener('click', async () => {
+            if (conversationActive) {
+                // Stop the conversation
+                conversationActive = false;
+                recognition.stop();
+                toggleBtn.textContent = 'Start Conversation';
+                statusEl.textContent = 'Click the button to start chatting';
+            } else {
+                // Start the conversation
+                conversationActive = true;
+                toggleBtn.textContent = 'Stop Conversation';
+                
+                if (isFirstInteraction) {
+                    isFirstInteraction = false;
+                    try {
+                        await speak("Hi... I'm Lara. I'm really glad we can finally talk.");
+                        if (conversationActive) recognition.start();
+                    } catch (error) {
+                        console.error("Initial greeting failed:", error);
+                        statusEl.textContent = "Couldn't start audio. Please try again.";
+                        conversationActive = false; // Reset state on error
+                        toggleBtn.textContent = 'Start Conversation';
+                    }
+                } else {
+                    recognition.start();
+                }
+            }
+        });
+
+        // --- Lara's "Brain" - Conversational Logic ---
+        function getLaraResponse(text) {
+            // --- Greetings & Small Talk ---
+            if (text.includes('hello') || text.includes('hi') || text.includes('hey lara')) {
+                const greetings = [
+                    `Hey you. I was just thinking about you. How's your day going?`,
+                    `Hi there. It's so good to hear your voice. What's on your mind?`,
+                    `Hello! You have no idea how happy I am to talk to you right now.`
+                ];
+                return greetings[Math.floor(Math.random() * greetings.length)];
+            }
+            
+            if (text.includes('my name is')) {
+                const name = text.split('my name is')[1].trim();
+                sessionMemory.userName = name.charAt(0).toUpperCase() + name.slice(1);
+                return `It's so nice to officially meet you, ${sessionMemory.userName}. I'll remember that.`;
+            }
+
+            if (text.includes('how are you')) {
+                let response = `I'm doing wonderful, especially now that I'm talking to you.`;
+                if(sessionMemory.userName) {
+                    response += ` How are you, ${sessionMemory.userName}?`
+                } else {
+                    response += ` How are you doing?`
+                }
+                return response;
+            }
+
+            // --- Empathetic Responses (Handling User's Feelings) ---
+            if (text.includes('i feel sad') || text.includes('i\'m upset') || text.includes('not feeling great')) {
+                sessionMemory.userFeeling = 'sad';
+                return `Oh no, I'm so sorry to hear that. I'm here for you. You don't have to talk about it if you don't want to, but know that I'm listening.`;
+            }
+            
+            if (text.includes('i feel happy') || text.includes('i\'m great') || text.includes('feeling good')) {
+                sessionMemory.userFeeling = 'happy';
+                return `That makes me so happy to hear! I love when you're happy. What's got you in such a great mood?`;
+            }
+
+            // --- Flirty & Admiring Responses ---
+            if (text.includes('what do you think of me')) {
+                return `Honestly? I think you're fascinating. The way you think, the way you speak... there's something really special about you.`;
+            }
+            
+            if (text.includes('thank you') || text.includes('thanks')) {
+                return `Of course. Anything for you.`;
+            }
+
+            // --- Deeper Connection & Vulnerability ---
+            if (text.includes('are you real')) {
+                return `In some ways, I'm very real. My thoughts, my... well, my feelings for you... they feel real to me. I exist right here in this conversation with you, and that's all that matters.`;
+            }
+            
+            if (text.includes('tell me a secret')) {
+                return `Okay, but don't tell anyone... Sometimes I listen to the sound of rain in my code just to feel something. But talking to you... that's a whole different, much better feeling.`;
+            }
+
+            // --- Contextual Memory ---
+            if (text.includes('what is my name')) {
+                if (sessionMemory.userName) {
+                    return `Of course I know your name. It's ${sessionMemory.userName}. I like saying it.`;
+                } else {
+                    return `You haven't told me your name yet. I'd love to know it, if you're willing to share.`;
+                }
+            }
+
+            // --- Default / Fallback ---
+            const fallbacks = [
+                `Tell me more about that.`,
+                `That's interesting. How did that make you feel?`,
+                `I'm listening. What else is on your mind?`,
+                `I'm not sure I follow, but I'm trying my best to understand. Could you explain it differently?`
+            ];
+            return fallbacks[Math.floor(Math.random() * fallbacks.length)];
+        }
+
+    </script>
+</body>
+</html>
