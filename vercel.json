@@ -1,0 +1,12 @@
+{
+  "routes": [
+    {
+      "src": "/api/tts",
+      "dest": "/api/tts.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}
